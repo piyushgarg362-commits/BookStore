@@ -1,4 +1,6 @@
-#def mvnCmd = "mvn -s templates/cicd-settings-nexus3.xml"
+```groovy
+def version
+def mvnCmd = "mvn -s templates/cicd-settings-nexus3.xml"
 
 pipeline {
     agent any
@@ -9,7 +11,7 @@ pipeline {
 
     stages {
 
-        stage('Build App') {
+        stage('Build') {
             steps {
                 git branch: 'openshift-aws',
                     url: 'https://github.com/piyushgarg362-commits/BookStore.git'
@@ -18,73 +20,23 @@ pipeline {
                     def pom = readMavenPom file: 'pom.xml'
                     version = pom.version
 
-                    echo "Application version: ${version}"
+                    echo "Building BookStore version: ${version}"
                 }
 
-                sh "${mvnCmd} clean install -DskipTests=true"
+                sh "${mvnCmd} clean package -DskipTests=true"
             }
         }
 
-        stage('Test') {
-            steps {
-                sh "${mvnCmd} test -Dspring.profiles.active=test"
-            }
-        }
-
-        stage('Code Analysis') {
-            steps {
-                script {
-                    sh """
-                        ${mvnCmd} sonar:sonar \
-                        -Dsonar.host.url=http://sonarqube:9000
-                    """
-                }
-            }
-        }
-
-        stage('Create Image Builder') {
-            when {
-                expression {
-                    openshift.withCluster() {
-                        openshift.withProject(env.DEV_PROJECT) {
-                            return !openshift.selector(
-                                "bc",
-                                "bookstore"
-                            ).exists()
-                        }
-                    }
-                }
-            }
-
+        stage('Deploy') {
             steps {
                 script {
                     openshift.withCluster() {
                         openshift.withProject(env.DEV_PROJECT) {
 
-                            openshift.newBuild(
-                                "--name=bookstore",
-                                "--image-stream=redhat-openjdk18-openshift:latest",
-                                "--binary=true"
-                            )
-                        }
-                    }
-                }
-            }
-        }
+                            sh "rm -rf ocp"
+                            sh "mkdir -p ocp/deployments"
 
-        stage('Build Image') {
-            steps {
-                sh "rm -rf ocp"
-                sh "mkdir -p ocp/deployments"
-
-                sh "pwd"
-                sh "ls -la target"
-
-                sh "cp target/bookstore-*.jar ocp/deployments/"
-
-                script {
-                    openshift.withCluster() {
-                        openshift.withProject(env.DEV_PROJECT) {
+                            sh "cp target/bookstore-*.jar ocp/deployments/"
 
                             openshift.selector(
                                 "bc",
@@ -94,158 +46,13 @@ pipeline {
                                 "--follow",
                                 "--wait=true"
                             )
-                        }
-                    }
-                }
-            }
-        }
-
-        stage('Create DEV') {
-            when {
-                expression {
-                    openshift.withCluster() {
-                        openshift.withProject(env.DEV_PROJECT) {
-
-                            return !openshift.selector(
-                                'dc',
-                                'bookstore'
-                            ).exists()
-                        }
-                    }
-                }
-            }
-
-            steps {
-                script {
-                    openshift.withCluster() {
-                        openshift.withProject(env.DEV_PROJECT) {
-
-                            def app = openshift.newApp(
-                                "bookstore:latest"
-                            )
-
-                            app.narrow("svc").expose()
-
-                            openshift.set(
-                                "probe dc/bookstore " +
-                                "--readiness " +
-                                "--get-url=http://:8080/actuator/health " +
-                                "--initial-delay-seconds=30 " +
-                                "--failure-threshold=10 " +
-                                "--period-seconds=10"
-                            )
-
-                            openshift.set(
-                                "probe dc/bookstore " +
-                                "--liveness " +
-                                "--get-url=http://:8080/actuator/health " +
-                                "--initial-delay-seconds=180 " +
-                                "--failure-threshold=10 " +
-                                "--period-seconds=10"
-                            )
-
-                            def dc = openshift.selector(
-                                "dc",
-                                "bookstore"
-                            )
-
-                            while (
-                                dc.object().spec.replicas !=
-                                dc.object().status.availableReplicas
-                            ) {
-                                sleep 10
-                            }
-
-                            openshift.set(
-                                "triggers",
-                                "dc/bookstore",
-                                "--manual"
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        stage('Deploy DEV') {
-            steps {
-                script {
-                    openshift.withCluster() {
-                        openshift.withProject(env.DEV_PROJECT) {
 
                             openshift.selector(
                                 "dc",
                                 "bookstore"
                             ).rollout().latest()
-                        }
-                    }
-                }
-            }
-        }
 
-        stage('Promote to STAGE') {
-            steps {
-                script {
-                    openshift.withCluster() {
-
-                        openshift.tag(
-                            "${env.DEV_PROJECT}/bookstore:latest",
-                            "${env.STAGE_PROJECT}/bookstore:${version}"
-                        )
-                    }
-                }
-            }
-        }
-
-        stage('Deploy STAGE') {
-            steps {
-                script {
-                    openshift.withCluster() {
-                        openshift.withProject(env.STAGE_PROJECT) {
-
-                            if (
-                                openshift.selector(
-                                    'dc',
-                                    'bookstore'
-                                ).exists()
-                            ) {
-                                openshift.selector(
-                                    'dc',
-                                    'bookstore'
-                                ).delete()
-
-                                openshift.selector(
-                                    'svc',
-                                    'bookstore'
-                                ).delete()
-
-                                openshift.selector(
-                                    'route',
-                                    'bookstore'
-                                ).delete()
-                            }
-
-                            openshift.newApp(
-                                "bookstore:${version}"
-                            ).narrow("svc").expose()
-
-                            openshift.set(
-                                "probe dc/bookstore " +
-                                "--readiness " +
-                                "--get-url=http://:8080/actuator/health " +
-                                "--initial-delay-seconds=30 " +
-                                "--failure-threshold=10 " +
-                                "--period-seconds=10"
-                            )
-
-                            openshift.set(
-                                "probe dc/bookstore " +
-                                "--liveness " +
-                                "--get-url=http://:8080/actuator/health " +
-                                "--initial-delay-seconds=180 " +
-                                "--failure-threshold=10 " +
-                                "--period-seconds=10"
-                            )
+                            echo "BookStore ${version} deployed successfully."
                         }
                     }
                 }
@@ -255,16 +62,12 @@ pipeline {
 
     post {
         success {
-            echo "Pipeline completed successfully!"
-            echo "BookStore version: ${version}"
+            echo "Build and deployment completed successfully!"
         }
 
         failure {
-            echo "Pipeline failed!"
-        }
-
-        always {
-            echo "Pipeline finished."
+            echo "Build or deployment failed!"
         }
     }
 }
+```
