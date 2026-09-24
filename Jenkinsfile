@@ -4,7 +4,7 @@ def version, mvnCmd = "mvn -s templates/cicd-settings-nexus3.xml"
        agent any
         tools
         {
-            maven 'M3'
+            maven 'maven3.8.4'
         }
 
         stages
