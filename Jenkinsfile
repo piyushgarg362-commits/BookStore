@@ -1,7 +1,3 @@
-```groovy
-def version
-def mvnCmd = "mvn -s templates/cicd-settings-nexus3.xml"
-
 pipeline {
     agent any
 
